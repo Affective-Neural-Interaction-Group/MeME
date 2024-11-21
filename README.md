@@ -1,7 +1,7 @@
 # MeME
-Multisubject Face Memory EEG dataset
+The Multisubject Face Memory EEG dataset
 
-The datasets are available at https://osf.io/dhuvs/.
+The datasets are available at https://osf.io/dhuvs/ (.fif) and https://drive.google.com/file/d/1WvTVDZMGlT02J1Jegsd0-lWGvdXHT4j9/view?usp=drive_link (.set).
 
 To get started with the dataset, please see the description below.
 
@@ -35,8 +35,35 @@ conda activate brainprompt
 
 ### Vectorizing epochs
 
+To convert the epochs data to machine learning tasks compatible tensors:
+```
+python vectorizing_epochs.py
+```
+
 ### Visualizing ERPs
+
+You can intertactively visualize the ERP components by following notebook:
+```
+erp_plots.ipynb
+```
+
 
 ### Classification
 
+To perform the binary classification task of distinguishing target and non-target epochs:
+```
+python classify.py
+```
+
 ### Image synthesis
+
+To generate the single-subject memory updated facial image:
+```
+python single_subject_synthesis.py
+```
+To generate the multi-subject memory updated facial image:
+```
+python multi_subject_synthesis.py
+```
+
+We provide latent codes of images with corresponding labels.
