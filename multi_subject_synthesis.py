@@ -63,8 +63,8 @@ def gen_avg(trial, avg_num):
 
     subject_list = ['6002', '6003', '6004', '6005', '6006', '6009', '6010', '6012', '6013', '6018', '6020', '6021', '6022', '6023', '6024', '6025', '6027', '6029', '6030', '6031', '6032', '6033', '6034', '6035', '6036', '6037', '6038', '6039', '6040']
     trial_names = ['1010', '355', '1172', '1111', '1156', '1223', '193', '209', '439', '908', '587', '2220', '6251', '269', '1160']
-    df_train = pd.read_csv('directory_of_your_training_resluts.csv')
-    df_test = pd.read_csv('/directory_of_your_testing_resluts.csv')
+    df_train = pd.read_csv('directory_of_your_training_results.csv')
+    df_test = pd.read_csv('directory_of_your_testing_results.csv')
     df_train['trial'] = trial_names
     df_test['trial'] = trial_names
     df_train_trial = df_train[df_train['trial'] == trial]
@@ -86,7 +86,7 @@ def gen_avg(trial, avg_num):
         
         check_list = result1 + result2
 
-        label_dic = pickle.load(open(f'/home/yc47480/mc15539/sub_list/{subject}_label_list.pkl', 'rb'))
+        label_dic = pickle.load(open(f'Use_the_given_label_lists/{subject}_label_list.pkl', 'rb'))
         trial_list = label_dic[f't{trial}']
 
         latent_codes = []
