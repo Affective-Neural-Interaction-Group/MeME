@@ -10,6 +10,7 @@ To get started with the dataset, please see the description below.
 ## Data format
 ### The raw data (*.mff).
 The raw data were collected through EGI’s Net Station software, which saves files in Metafile Format (MFF), which can be exported to the EDF+ format, MATLAB, EEGLAB, FieldTrip, or your own custom software.
+We cannot upload the file for the file size limit. Please contact us to get the raw data.
 
 ### Half-preprocessed data (*.set).
 Data were half-preprocessed using a MATLAB toolbox, EEGLAB, and datasets were saved as a .set file. 
