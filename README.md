@@ -10,7 +10,7 @@ To get started with the dataset, please see the description below.
 ## Data format
 ### The raw data (*.mff).
 The raw data were collected through EGI’s Net Station software, which saves files in Metafile Format (MFF), which can be exported to the EDF+ format, MATLAB, EEGLAB, FieldTrip, or your own custom software.
-We cannot upload the file for the file size limit. Please contact us to get the raw data.
+- We cannot upload the file for the file size limit. Please contact us to get the raw data.
 
 ### Half-preprocessed data (*.set).
 Data were half-preprocessed using a MATLAB toolbox, EEGLAB, and datasets were saved as a .set file. 
@@ -36,35 +36,31 @@ conda activate brainprompt
 
 ### Vectorizing epochs
 
-To convert the epochs data to machine learning tasks compatible tensors:
+Convert the epochs data to machine learning tasks compatible tensors:
 ```
 python vectorizing_epochs.py
-```
-
-### Visualizing ERPs
-
-You can intertactively visualize the ERP components by following notebook:
-```
-erp_plots.ipynb
 ```
 
 
 ### Classification
 
-To perform the binary classification task of distinguishing target and non-target epochs:
+Perform the binary classification task of distinguishing target and non-target epochs:
 ```
-python classify.py
+python classification.py
 ```
 
 ### Image synthesis
 
-To generate the single-subject memory updated facial image:
+Generate the single-subject memory updated facial image:
 ```
 python single_subject_synthesis.py
 ```
-To generate the multi-subject memory updated facial image:
+
+Generate the multi-subject memory updated facial image:
 ```
 python multi_subject_synthesis.py
 ```
 
-We provide latent codes of images with corresponding labels.
+Some additional files we provide:
+- Labels of images detected by each subject for each trial. 
+- Latent codes of images with corresponding labels.
