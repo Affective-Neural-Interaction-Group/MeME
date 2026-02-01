@@ -1,158 +1,173 @@
 import mne
 import os
 import numpy as np
-from sklearn.metrics import accuracy_score
-from sklearn.model_selection import train_test_split
-from sklearn.metrics import accuracy_score
+import pandas as pd
+from sklearn.metrics import accuracy_score, roc_auc_score, f1_score
 from sklearn.discriminant_analysis import LinearDiscriminantAnalysis as LDA
-from vectorizing_epochs import vectorize_epochs
+from sklearn.model_selection import StratifiedKFold
+from mne.decoding import CSP
+from imblearn.over_sampling import SMOTE
 
-# load the epoch data
-epochs_dir = 'Enter the path to the folder where the epoch data is stored'
+# Configuration
+epochs_dir = '/home/yc47480/brainprompt/epochs'
+n_folds = 5
+n_csp_components = 6  # Increased from 4 to capture more detail
+
 files = os.listdir(epochs_dir)
-
 detected_markers = {}
+performance_records = []
+
+# Initialize CSP strictly for feature extraction
+# We fit CSP on training data only inside the loop to avoid leakage
+csp = CSP(n_components=n_csp_components, reg='ledoit_wolf', log=True, norm_trace=False)
+
+# Initialize LDA with Shrinkage (Better for high-dimensional EEG)
+lda = LDA(solver='lsqr', shrinkage='auto')
+
 for file in files:
     if file.endswith('.fif'):
-        # get the filename
+        print(f"\nProcessing Subject: {file}")
         filename = file.split('.')[0]
-        epochs = mne.read_epochs(os.path.join(epochs_dir, file))
+        epochs = mne.read_epochs(os.path.join(epochs_dir, file), preload=True, verbose=False)
 
-        # trial list
-        t1010 = epochs[:255]
-        t355 = epochs[255:510]
-        t1172 = epochs[510:765]
-        t1111 = epochs[765:1020]
-        t1156 = epochs[1020:1275]
-        t1223 = epochs[1275:1530]
-        t193 = epochs[1530:1785]
-        t209 = epochs[1785:2040]
-        t439 = epochs[2040:2295]
-        t908 = epochs[2295:2550]
-        t587 = epochs[2550:2805]
-        t2220 = epochs[2805:3060]
-        t6251 = epochs[3060:3315]
-        t269 = epochs[3315:3570]
-        t1160 = epochs[3570:3825]
+        # 0. Pre-processing: Drop bad epochs (Artifact Rejection)
+        # Drop epochs with variance > 150uV (blinks/movement)
+        epochs.drop_bad(reject=dict(eeg=150e-6), verbose=False)
 
+        # --- Data Slicing ---
         epoch_dict = {
-        't1010': t1010,
-        't355':t355,
-        't1172':t1172,
-        't1111':t1111,
-        't1156':t1156,
-        't1223':t1223,
-        't193':t193,
-        't209':t209,
-        't439':t439,
-        't908':t908,
-        't587':t587,
-        't2220': t2220,
-        't6251': t6251,
-        't269':t269,
-        't1160': t1160
+            't1010': epochs[:255],
+            't355':  epochs[255:510],
+            't1172': epochs[510:765],
+            't1111': epochs[765:1020],
+            't1156': epochs[1020:1275],
+            't1223': epochs[1275:1530],
+            't193':  epochs[1530:1785],
+            't209':  epochs[1785:2040],
+            't439':  epochs[2040:2295],
+            't908':  epochs[2295:2550],
+            't587':  epochs[2550:2805],
+            't2220': epochs[2805:3060],
+            't6251': epochs[3060:3315],
+            't269':  epochs[3315:3570],
+            't1160': epochs[3570:3825]
         }
+
         trial_mark = {}
 
-        for epoch_name, cur_epochs in epoch_dict.items(): 
-            print(epoch_name)
-
-            # Select epochs where event names start with 't'
-            t_event_names = [event for event in cur_epochs.event_id if event.startswith('t')]
-            tcur_epochs = cur_epochs[t_event_names]
-
-            # prepare t labels
-            t_labels = list(tcur_epochs.event_id.keys())
-
-            # Vectorize the 't' epochs data
-            Xt = vectorize_epochs(tcur_epochs)
-
-            # Flatten the last two dimensions of Xt
-            n_epochs, n_channels, n_windows = Xt.shape
-            Xt_flattened = Xt.reshape((n_epochs, n_channels * n_windows))
-
-            # Create a dictionary to store the signal data for each t label
-            sig_dic = {}
-            for i in range(len(t_labels)):
-                sig_dic[t_labels[i]] = Xt_flattened[i, :]
-
-            # Select epochs where event names start with 'nt'
-            nt_event_names = [event for event in cur_epochs.event_id if not event.startswith('t')]
-            ntcur_epochs = cur_epochs[nt_event_names]
-
-            # Vectorize the 'nt' epochs data
-            Xnt = vectorize_epochs(ntcur_epochs)      
-           
-            # Flatten the last two dimensions of Xnt
-            n_epochs_nt, n_channels_nt, n_windows_nt = Xnt.shape
-
-            # Shuffle and reduce Xnt while keeping track of indices
-            indices = np.arange(n_epochs_nt)
-            np.random.shuffle(indices)
-            xt_range = Xt.shape[0] 
-            reduced_indices = indices[:xt_range]
-            Xnt_reduced = Xnt[reduced_indices, :, :]
-
-            # Reshape the reduced data
-            Xnt_flattened = Xnt_reduced.reshape((xt_range, n_channels_nt * n_windows_nt))
+        for epoch_name, cur_epochs in epoch_dict.items():
             
-            nt_labels = list(ntcur_epochs.event_id.keys())
-            # Ensure the number of tags matches the reduced number of epochs
-            if len(nt_tags) > xt_range:
-                nt_tags = nt_tags[:xt_range]
-            # Use the reduced indices to map back to the original nt labels
-            for i, idx in enumerate(reduced_indices):
-                if idx < len(nt_labels):
-                    sig_dic[nt_labels[idx]] = Xnt_flattened[i, :]
+            # 1. Extract Target (t) and Non-Target (nt)
+            t_ids = [k for k in cur_epochs.event_id if k.startswith('t')]
+            nt_ids = [k for k in cur_epochs.event_id if not k.startswith('t')]
 
-            # Combine the 't' and 'nt' tensors
-            X_combined = np.concatenate((Xt, Xnt_reduced), axis=0)
+            if not t_ids or not nt_ids:
+                continue
 
-            # Flatten the last two dimensions of X_combined
-            n_epochs, n_channels, n_windows = X_combined.shape
-            X_flattened = X_combined.reshape((n_epochs, n_channels * n_windows))
+            t_epochs = cur_epochs[t_ids]
+            nt_epochs = cur_epochs[nt_ids]
 
-            # Create labels for the combined data
-            y_labels = np.concatenate((np.ones(len(Xt)), np.zeros(len(Xnt_reduced))))
+            # Get Data (Epochs x Channels x Time)
+            Xt = t_epochs.get_data(copy=True)
+            Xnt = nt_epochs.get_data(copy=True)
 
-            # Now use X_flattened instead of X_combined for train_test_split
-            from sklearn.model_selection import train_test_split
-            X_train, X_test, y_train, y_test = train_test_split(X_flattened, y_labels, test_size=0.2)
+            # Skip blocks with too few targets (SMOTE needs at least ~6 samples)
+            if len(Xt) < 6:
+                print(f"  [{epoch_name}] Skipped: Not enough targets for CV.")
+                continue
 
-            # Create a dictionary to store classifier instances, where you can select the classifier you want to use, or add more classifiers
-            clf_dic = {
-                # 'svm' : sklearn.svm.SVC(),
-                # 'logreg' : sklearn.linear_model.LogisticRegression(),
-                # 'random_forest' : ensemble.RandomForestClassifier(n_estimators=100, random_state=42),
-                # 'gradient_boosting' : ensemble.GradientBoostingClassifier(),
-                # 'knn' : neighbors.KNeighborsClassifier(),
-                # 'decision_tree' : tree.DecisionTreeClassifier(),
-                # 'naive_bayes' : naive_bayes.GaussianNB(),
-                # 'adaboost' : ensemble.AdaBoostClassifier(),
-                # 'mlp' : neural_network.MLPClassifier(),
-                'lda' : LDA() # Linear Discriminant Analysis is a good choice for this type of data
-            }
+            # 2. Prepare Labels and IDs
+            # We use ALL non-targets now (No undersampling yet)
+            X_raw = np.concatenate((Xt, Xnt), axis=0)
             
-            for clf_name, clf in clf_dic.items():
-                clf.fit(X_train, y_train)
-                y_pred = clf.predict(X_test)
+            # Create labels: 1 = Target, 0 = Non-Target
+            y_raw = np.concatenate((np.ones(len(Xt)), np.zeros(len(Xnt))))
 
-                # Evaluate the classifier
-                accuracy = accuracy_score(y_test, y_pred)
-                print(f"{clf_name:<30s}Accuracy: {accuracy}")
+            # Store marker strings for reconstruction
+            rev_event_id = {v: k for k, v in cur_epochs.event_id.items()}
+            yt_labels = [rev_event_id[e[2]] for e in t_epochs.events]
+            ynt_labels = [rev_event_id[e[2]] for e in nt_epochs.events]
+            raw_marker_labels = np.array(yt_labels + ynt_labels)
 
-                y_pred_train = clf.predict(X_train)
-                
-                instance_with_label = X_test[y_pred == 1]
-                markers = [key for key, value in sig_dic.items() if any(i in value for i in instance_with_label)] 
+            # 3. Cross-Validation with SMOTE Inside the Loop
+            # Critical: SMOTE must only be applied to TRAINING data, never test data.
             
-                trial_mark[epoch_name] = markers
+            cv = StratifiedKFold(n_splits=n_folds, shuffle=True, random_state=42)
+            
+            # Arrays to store results
+            y_true_all = []
+            y_pred_all = []
+            y_prob_all = []
+            test_indices_all = []
 
-            # save the markers
-            detected_markers[filename] = trial_mark
-            print(detected_markers)
+            for train_idx, test_idx in cv.split(X_raw, y_raw):
+                # Split Train/Test
+                X_train_3d, X_test_3d = X_raw[train_idx], X_raw[test_idx]
+                y_train, y_test = y_raw[train_idx], y_raw[test_idx]
 
-        import pandas as pd
-        df = pd.DataFrame(detected_markers)
-        # save as csv
-        df.to_csv('detected_markers_test.csv', index=False)
+                # A. Fit CSP on Training Data Only
+                # Transform 3D EEG -> 2D Features
+                X_train_csp = csp.fit_transform(X_train_3d, y_train)
+                X_test_csp = csp.transform(X_test_3d)
+
+                # B. Apply SMOTE to Training Features Only
+                # This balances the class 1 vs class 0 count by creating synthetic targets
+                smote = SMOTE(random_state=42)
+                X_train_bal, y_train_bal = smote.fit_resample(X_train_csp, y_train)
+
+                # C. Train LDA on Balanced Data
+                lda.fit(X_train_bal, y_train_bal)
+
+                # D. Predict on (Imbalanced) Test Data
+                y_pred = lda.predict(X_test_csp)
+                y_prob = lda.predict_proba(X_test_csp)[:, 1]
+
+                # Store results
+                y_true_all.extend(y_test)
+                y_pred_all.extend(y_pred)
+                y_prob_all.extend(y_prob)
+                test_indices_all.extend(test_idx)
+
+            # 4. Calculate Metrics
+            y_true_all = np.array(y_true_all)
+            y_pred_all = np.array(y_pred_all)
+            y_prob_all = np.array(y_prob_all)
+            test_indices_all = np.array(test_indices_all)
+
+            acc = accuracy_score(y_true_all, y_pred_all)
+            auc = roc_auc_score(y_true_all, y_prob_all)
+            f1 = f1_score(y_true_all, y_pred_all)
+
+            print(f"  [{epoch_name:<6}] AUC: {auc:.3f} | Acc: {acc:.3f} | F1: {f1:.3f}")
+
+            performance_records.append({
+                'Subject': filename,
+                'Trial_Block': epoch_name,
+                'AUC': auc,
+                'Accuracy': acc,
+                'F1': f1
+            })
+
+            # 5. Retrieve Markers (Reconstruction Logic)
+            # Map predictions back to the original file indices
+            # We identify which original indices were predicted as '1' (Target)
+            
+            predicted_as_target_mask = (y_pred_all == 1)
+            original_indices_predicted_target = test_indices_all[predicted_as_target_mask]
+            
+            # Retrieve the string labels
+            retrieved_markers = raw_marker_labels[original_indices_predicted_target].tolist()
+            trial_mark[epoch_name] = retrieved_markers
+
+        detected_markers[filename] = trial_mark
+
+# Save Results
+df_markers = pd.DataFrame.from_dict(detected_markers, orient='index')
+df_markers.to_csv('detected_markers_smote.csv')
+
+df_perf = pd.DataFrame(performance_records)
+df_perf.to_csv('performance_metrics_smote.csv', index=False)
+
+print("\nProcessing complete.")
+if not df_perf.empty:
+    print(f"Average AUC: {df_perf['AUC'].mean():.4f}")
