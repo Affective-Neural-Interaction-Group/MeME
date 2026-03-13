@@ -1,104 +1,91 @@
 import os
-import re
+import torch
+import pickle
 import numpy as np
 import pandas as pd
-import matplotlib.pyplot as plt
-import pickle
-from tqdm import tqdm
 import ast
-import torch
-import PIL.Image
+from PIL import Image
+from tqdm import tqdm
 
-def lerp(code1, code2, alpha):
-    return code1 * alpha + code2 * (1 - alpha)
+# =============================================================================
+# 1. CONFIGURATION (Updated to match your successful environment)
+# =============================================================================
+CSV_PATH = './regression_detected_markers.csv'
+LATENT_BASE_DIR = './latent_codes' 
+GENERATOR_PATH = './stylegan3-r-ffhq-1024x1024.pkl'
+SAVE_DIR = './generated_images/reconstructions_weighted'
 
-def interpolate(latent_code_1, latent_code_2, num_interps):
-    step_size = 1.0/num_interps
-    amounts = np.arange(0, 1, step_size)
-    interpolated_codes = []
-    for seed_idx, alpha in enumerate(tqdm(amounts)):
-        interpolated_code = lerp(latent_code_2, latent_code_1, alpha)
-        interpolated_codes.append(interpolated_code)
-    return interpolated_codes
+os.makedirs(SAVE_DIR, exist_ok=True)
 
-def generate_image(z):
-    z = torch.from_numpy(z).unsqueeze(0).to(device)
-    label = torch.zeros([1, generator.c_dim], device=device)
-    w = generator.mapping(z, label, truncation_psi=0.8)
-    img = generator.synthesis(w, noise_mode="const")
-    img = (img.permute(0, 2, 3, 1) * 127.5 + 128).clamp(0, 255).to(torch.uint8)
-    img = PIL.Image.fromarray(img[0].cpu().numpy(), 'RGB')
-    img.save(SAVE_PATH + f'image_{i}.png', format='png')
-    return img
+# =============================================================================
+# 2. INITIALIZATION
+# =============================================================================
+print(f"Loading StyleGAN3 from {GENERATOR_PATH}...")
+device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+with open(GENERATOR_PATH, 'rb') as f:
+    G = pickle.load(f)['G_ema'].to(device).eval()
 
-
-SAVE_PATH = 'define_save_path_here'
-# Load the pretrained the StyleGAN model 
-generator_path = './stylegan3-r-ffhq-1024x1024.pkl'
-print('Loading generator from "%s"...' % generator_path)
-device = torch.device('cuda')
-with open(generator_path, "rb") as f:
-    generator = pickle.load(f)['G_ema'].cuda()
-
-
-trial_names = ['1010', '355', '1172', '1111', '1156', '1223', '193', '209', '439', '908', '587', '2220', '6251', '269', '1160']
-all_sub_dist = {}
-dist_dict = {}
-df_train = pd.read_csv('directory_of_your_training_results')
-df_test = pd.read_csv('directory_of_your_testing_results')
-df_train['trial'] = trial_names
-df_test['trial'] = trial_names
-subject_list = ['6002', '6003', '6004', '6005', '6006', '6009', '6010', '6012', '6013', '6018', '6020', '6021', '6022', '6023', '6024', '6025', '6027', '6029', '6030', '6031', '6032', '6033', '6034', '6035', '6036', '6037', '6038', '6039', '6040']
-for subject in subject_list:
-    print(subject)
-    for j in trial_names:
-        list1 = df_train[f'{subject}_1_allchansok'].loc[df_train['trial'] == j].tolist()
-        list2 = df_test[f'{subject}_1_allchansok'].loc[df_test['trial'] == j].tolist()
-        result1 = ast.literal_eval(list1[0])
-        result2 = ast.literal_eval(list2[0])
-        check_list = result1 + result2
-        label_dic = pickle.load(open(f'Use_the_given_label_lists/{subject}_label_list.pkl', 'rb'))
-        trial_list = label_dic[f't{j}']
-
-        LATENT_DIR = f'directory_of_latent_codes/{j}'
-        print(LATENT_DIR)
-        source_code_dir = f'directory_of_latent_codes/{j}/t000.npy'
-        with open(source_code_dir, 'rb') as s:
-            source_code = np.load(s)
-
-        latent_codes = []
-        detected_list = []
-        for i in trial_list:
-            if i in check_list:
-                detected_list.append(i)
-
-        for i in detected_list:
-            path = os.path.join(LATENT_DIR, f'{i}.npy')
-            # print(path)
-            if not os.path.exists(path):
-                continue
-            else:
-                with open(path, 'rb') as f:
-                    latent_code = np.load(f)
-                    latent_codes.extend(latent_code)
-
-        all_interpolations = []
-        total_steps = 200 # total fine steps between codes
-        step_at = 60 # start the next interpolation from this step
-
-        if len(latent_codes) > 1:
-            interpolated_code = latent_codes[0]  # Set initial code
-
-        for i in range(1, len(latent_codes)):
-            # Interpolate from the last stepped latent code to the next one in the list
-            fine_interpolations = interpolate(interpolated_code, latent_codes[i], total_steps)
-
-            # Select only every "step_at"-th interpolated code
-            selected_interpolations = fine_interpolations[::step_at]
-            all_interpolations.extend(selected_interpolations)
+# =============================================================================
+# 3. CORE PROCESSING LOGIC
+# =============================================================================
+def generate_weighted_image(z_codes, weights, save_path):
+    # Convert to tensor and ensure float32
+    z_batch = torch.from_numpy(np.stack(z_codes)).to(device).to(torch.float32)
+    labels = torch.zeros([len(z_batch), G.c_dim], device=device)
+    
+    with torch.no_grad():
+        # 1. Map all Z to W
+        w_batch = G.mapping(z_batch, labels, truncation_psi=0.8)
         
-            if selected_interpolations:
-                interpolated_code = selected_interpolations[-1]
+        # 2. Compute Weighted Centroid in W-space
+        w_weights = torch.tensor(weights, device=device).view(-1, 1, 1)
+        weighted_w = torch.sum(w_batch * w_weights, dim=0, keepdim=True) / torch.sum(w_weights)
+        
+        # 3. Synthesize
+        img = G.synthesis(weighted_w, noise_mode="const")
+        
+        # 4. Post-process
+        img = (img.permute(0, 2, 3, 1) * 127.5 + 128).clamp(0, 255).to(torch.uint8)
+        img_np = img[0].cpu().numpy()
+        
+    img_pil = Image.fromarray(img_np, 'RGB')
+    img_pil.save(save_path)
 
-        final_code = all_interpolations[-1]
-        img = generate_image(final_code)
+# =============================================================================
+# 4. MAIN LOOP
+# =============================================================================
+df = pd.read_csv(CSV_PATH)
+trial_columns = [c for c in df.columns if c != 'subject']
+
+for _, row in df.iterrows():
+    subject_id = str(row['subject'])
+    
+    for trial_col in trial_columns:
+        trial_num = trial_col.replace('t', '')
+        latent_dir = os.path.join(LATENT_BASE_DIR, trial_num)
+        
+        # Safe Parsing
+        try:
+            detected_data = ast.literal_eval(row[trial_col])
+        except: continue
+        
+        z_codes, weights = [], []
+        
+        for item in detected_data:
+            # Handle both ('label', prob) and 'label'
+            if isinstance(item, tuple):
+                lbl, weight = item[0], float(item[1])
+            else:
+                lbl, weight = item, 1.0
+            
+            npy_path = os.path.join(latent_dir, f"{lbl}.npy")
+            if os.path.exists(npy_path):
+                z = np.load(npy_path).flatten()
+                z_codes.append(z)
+                weights.append(weight)
+        
+        if len(z_codes) > 0:
+            save_img_path = os.path.join(SAVE_DIR, f"{subject_id}_{trial_num}_weighted_recon.png")
+            generate_weighted_image(z_codes, weights, save_img_path)
+            
+print(f"Done! Images saved to {SAVE_DIR}")
